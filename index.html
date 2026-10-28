@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canada Retirement Planner</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>Canada Retirement Planner</h1>
+      <p class="sub">RRSP → RRIF, TFSA, non-registered, FHSA, RESP, CPP and OAS — compare withdrawal plans and their tax.</p>
+      <nav class="tabs" role="tablist">
+        <button data-tab="profile" class="active">1 · Profile &amp; accounts</button>
+        <button data-tab="budget">2 · Budget</button>
+        <button data-tab="scenarios">3 · Scenarios</button>
+        <button data-tab="results">4 · Results</button>
+        <button data-tab="rules">Rules &amp; tables</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="tab-profile" class="tab active">
+      <div id="profile-form"></div>
+    </section>
+
+    <section id="tab-budget" class="tab">
+      <div class="card">
+        <h2>Retirement budget (monthly)</h2>
+        <p class="muted">Modelled on the FCAC <a href="https://www.canada.ca/en/financial-consumer-agency/services/make-budget.html" target="_blank" rel="noopener">Budget Planner on canada.ca</a>. Enter what you expect to spend each month in retirement, in today's dollars.</p>
+        <div id="budget-form" class="grid"></div>
+        <div class="budget-total">
+          <div><span class="muted">Monthly</span><strong id="budget-month"></strong></div>
+          <div><span class="muted">Annual (after tax)</span><strong id="budget-year"></strong></div>
+          <button id="budget-apply" class="primary">Use as retirement spending</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-scenarios" class="tab">
+      <p class="muted">Each option is a different plan for the same person. Change any setting, or let <b>Optimize</b> search for the RRSP/RRIF withdrawal level (and optionally CPP/OAS start ages) that leaves the most after-tax money while still meeting your spending.</p>
+      <div id="scenario-cards" class="scen-grid"></div>
+    </section>
+
+    <section id="tab-results" class="tab">
+      <div class="card">
+        <h2>Scenario comparison <span class="muted small">(today's dollars)</span></h2>
+        <div class="table-wrap"><table id="compare" class="data"></table></div>
+      </div>
+      <div class="chart-grid">
+        <div class="card"><h3>Total savings by age (today's $)</h3><div class="chart-box"><canvas id="ch-bal"></canvas></div></div>
+        <div class="card"><h3>Income tax + OAS clawback per year (today's $)</h3><div class="chart-box"><canvas id="ch-tax"></canvas></div></div>
+      </div>
+      <div class="card">
+        <div class="row-between">
+          <h3>Where the money comes from</h3>
+          <select id="mix-scen"></select>
+        </div>
+        <div class="chart-box tall"><canvas id="ch-mix"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="row-between">
+          <h3>Year-by-year plan</h3>
+          <div class="controls">
+            <select id="detail-scen"></select>
+            <label class="inline"><input type="checkbox" id="real-toggle" checked> Today's $</label>
+            <button id="csv">Export CSV</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table id="detail" class="data small"></table></div>
+      </div>
+    </section>
+
+    <section id="tab-rules" class="tab">
+      <div class="chart-grid">
+        <div class="card">
+          <h2>RRIF minimum withdrawal factors</h2>
+          <p class="muted">Prescribed by CRA (<a href="https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/completing-slips-summaries/t4rsp-t4rif-information-returns/payments/chart-prescribed-factors.html" target="_blank" rel="noopener">canada.ca chart</a>). Minimum = factor × RRIF value on January 1, using your age at January 1 (or your younger spouse's age if you choose that when opening the RRIF). No minimum in the year the RRIF is opened. Under 71 the factor is 1 ÷ (90 − age).</p>
+          <div class="calc">
+            <label>RRIF value Jan 1 <input type="number" id="rc-bal" value="500000"></label>
+            <label>Age Jan 1 <input type="number" id="rc-age" value="72"></label>
+            <div>Minimum this year: <strong id="rc-out"></strong></div>
+          </div>
+          <div class="table-wrap"><table id="rrif-table" class="data small"></table></div>
+        </div>
+        <div class="card rules">
+          <h2>Key rules used</h2>
+          <h4>RRSP → RRIF</h4>
+          <ul>
+            <li>RRSP must be converted (RRIF or annuity) by Dec 31 of the year you turn 71; first minimum is due the next year (age 72).</li>
+            <li>Converting earlier (e.g. at 64) makes RRIF withdrawals at 65+ eligible for the $2,000 pension income credit and pension splitting.</li>
+            <li>Withholding on amounts above the minimum: 10% up to $5,000, 20% $5,001–$15,000, 30% over $15,000 (outside Quebec). It's a prepayment, settled on your return.</li>
+            <li>At death, the remaining RRIF is fully taxable on the final return unless rolled to a spouse.</li>
+          </ul>
+          <h4>Couples</h4>
+          <ul>
+            <li><b>Pension income splitting:</b> up to 50% of eligible pension income can be moved to a spouse on your tax returns (form T1032) — RRIF withdrawals at 65+ and DB pension at any age. The planner picks the split that minimizes combined tax each year.</li>
+            <li><b>Younger spouse's age:</b> when the RRIF is set up you can base minimums on the younger spouse's age, which lowers the required withdrawal.</li>
+            <li><b>At the first death:</b> RRSP/RRIF, TFSA (successor holder) and non-registered assets pass to the surviving spouse tax-free. The survivor gets a CPP survivor benefit (≈60% of the deceased's CPP at 65+, capped at the max pension) and any DB survivor pension. The deceased's OAS stops.</li>
+          </ul>
+          <h4>CPP</h4>
+          <ul><li>Start 60–70. −0.6% per month before 65 (−36% at 60), +0.7% per month after 65 (+42% at 70). Get your estimate from <a href="https://www.canada.ca/en/employment-social-development/services/my-account.html" target="_blank" rel="noopener">My Service Canada Account</a>.</li></ul>
+          <h4>OAS</h4>
+          <ul>
+            <li>Start 65–70, +0.6% per month deferred (+36% at 70). +10% from age 75. Partial OAS = years in Canada after 18 ÷ 40.</li>
+            <li><a href="https://www.canada.ca/en/services/benefits/publicpensions/cpp/old-age-security/recovery-tax.html" target="_blank" rel="noopener">Recovery tax</a>: 15% of net income above the threshold (≈ $95,323 for 2026).</li>
+          </ul>
+          <h4>TFSA</h4>
+          <ul><li>Withdrawals are tax-free and don't count toward OAS clawback. Amounts withdrawn get their room back the next January. New room $7,000/yr (2026).</li></ul>
+          <h4>Non-registered (savings, chequing, GICs, mutual funds, stocks)</h4>
+          <ul><li>Interest is fully taxed. Eligible dividends are grossed up 38% (this raises net income for OAS clawback) with a dividend tax credit. Only 50% of capital gains are taxed; the cost base (ACB) of what you sell comes back tax-free.</li></ul>
+          <h4>FHSA</h4>
+          <ul><li>Qualifying home purchase: tax-free. Otherwise transfer to RRSP/RRIF tax-free without using RRSP room. Must close by the 15th year after opening or end of the year you turn 71.</li></ul>
+          <h4>RESP</h4>
+          <ul><li>Your contributions come back tax-free. Grants + growth paid to a student (EAPs) are taxed in the student's hands. If no child studies: grants are repaid, and growth (AIP) can go to your RRSP (up to $50,000 if you have room); otherwise it's taxed at your rate +20%.</li></ul>
+          <h4>Official tools</h4>
+          <ul>
+            <li><a href="https://www.canada.ca/en/services/benefits/publicpensions/cpp/retirement-income-calculator.html" target="_blank" rel="noopener">Canadian Retirement Income Calculator</a></li>
+            <li><a href="https://www.canada.ca/en/financial-consumer-agency/services/make-budget.html" target="_blank" rel="noopener">FCAC Budget Planner</a></li>
+            <li><a href="https://www.canada.ca/en/revenue-agency/services/tax/individuals/frequently-asked-questions-individuals/canadian-income-tax-rates-individuals-current-previous-years.html" target="_blank" rel="noopener">Income tax rates (CRA)</a></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <p class="disclaimer">Educational planning tool, not financial or tax advice. Tax figures are 2026 estimates (no Quebec/QPP, no GIS); future years assume brackets and benefits rise with inflation. Verify against canada.ca and consider a fee-only planner before acting.</p>
+  </main>
+
+  <script src="js/taxdata.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
