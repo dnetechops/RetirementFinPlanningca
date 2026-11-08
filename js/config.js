@@ -1,6 +1,7 @@
 // Supabase connection. Leave both blank to run in demo mode (data stays in this browser).
-// The anon key is designed to be public: access is controlled by the database's Row-Level Security.
+// The publishable key is designed to be public: access is controlled by the database's Row-Level Security.
+// Never put the secret / service_role key here.
 window.FIMOKSHA_CONFIG = {
-  supabaseUrl: '',      // e.g. 'https://abcdefgh.supabase.co'
-  supabaseAnonKey: '',  // Project Settings → API → anon public key
+  supabaseUrl: 'https://fkixvfpjqqminsdpwung.supabase.co',
+  supabaseAnonKey: 'sb_publishable_gpavlKJ3dWXFDqnCl2brZA_uToELWS8',
 };

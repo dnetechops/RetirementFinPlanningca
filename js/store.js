@@ -6,8 +6,8 @@
 
   // ---------------- Supabase ----------------
   function supabaseStore() {
-    let sb, me = null;
-    const SB_SCRIPT = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';
+    let sb, me = null, recovery = /type=recovery/.test(location.hash);
+    const SB_SCRIPT = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js';
     const load = () => new Promise((res, rej) => {
       if (window.supabase) return res();
       const s = document.createElement('script');
@@ -23,15 +23,25 @@
     }
     return {
       mode: 'supabase',
-      async init() { await load(); sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey); return loadMe(); },
+      async init() {
+        await load();
+        sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+        sb.auth.onAuthStateChange(event => { if (event === 'PASSWORD_RECOVERY') recovery = true; });
+        const user = await loadMe();
+        // Clean the sign-in tokens out of the address bar after an email link.
+        if (/access_token|code=|type=/.test(location.hash + location.search)) history.replaceState(null, '', location.pathname);
+        return user;
+      },
+      inRecovery: () => recovery,
+      async setNewPassword(password) { err(await sb.auth.updateUser({ password })); recovery = false; },
       me: () => me,
       async signIn(email, password) { err(await sb.auth.signInWithPassword({ email, password })); return loadMe(); },
       async signUp(email, password, firstName, lastName) {
-        const d = err(await sb.auth.signUp({ email, password, options: { data: { first_name: firstName, last_name: lastName } } }));
+        const d = err(await sb.auth.signUp({ email, password, options: { data: { first_name: firstName, last_name: lastName }, emailRedirectTo: location.origin + location.pathname } }));
         if (!d.session) return { needsConfirmation: true };
         return loadMe();
       },
-      async resetPassword(email) { err(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] })); },
+      async resetPassword(email) { err(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname })); },
       async signOut() { await sb.auth.signOut(); me = null; },
       async listHouseholds() {
         const rows = err(await sb.from('households').select('id, name, owner_id, updated_at, owner:profiles!households_owner_id_fkey(first_name, last_name, email)').order('updated_at', { ascending: false }));
@@ -102,6 +112,7 @@
         return me && { ...me };
       },
       me: () => me && { ...me },
+      inRecovery: () => false,
       demoUsers: () => read().users.map(u => ({ ...u })),
       async demoSignIn(id) {
         me = read().users.find(u => u.id === id) || null;

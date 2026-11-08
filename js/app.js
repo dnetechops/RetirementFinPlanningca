@@ -29,7 +29,22 @@
   async function boot() {
     $('#mode-badge').hidden = S.mode !== 'demo';
     try { me = await S.init(); } catch (e) { $('#view-loading').innerHTML = `<p class="bad">Couldn't start: ${esc(e.message)}</p>`; return; }
+    if (me && S.inRecovery()) return showSetPassword();
     me ? afterLogin() : showAuth();
+  }
+
+  // After a password-reset email link: choose a new password.
+  function showSetPassword() {
+    $('#view-auth').innerHTML = `<div class="auth"><div class="card"><h2>Choose a new password</h2>
+      <form id="newpw-form" class="stack">
+        <label>New password (8+ characters)<input type="password" name="pw" minlength="8" required autocomplete="new-password"></label>
+        <button class="primary">Save password</button><p id="newpw-msg" class="msg"></p>
+      </form></div></div>`;
+    show('auth');
+    $('#newpw-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      try { await S.setNewPassword(new FormData(e.target).get('pw')); afterLogin(); } catch (err) { flash($('#newpw-msg'), err.message, false); }
+    });
   }
 
   // ---------------- auth ----------------
