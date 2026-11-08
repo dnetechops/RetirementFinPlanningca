@@ -76,6 +76,8 @@
 
   // p = profile inputs, s = scenario settings
   const sum = a => a.reduce((x, y) => x + y, 0);
+  // Gains on these are not taxed (principal residence exemption; personal-use vehicles rarely gain).
+  const EXEMPT_ASSETS = { principal: true, vehicle: true };
 
   // Split amount A across people in proportion to what each has available.
   function propAlloc(A, av) {
@@ -103,7 +105,8 @@
       age0: g('age'), retireAge: g('retireAge'), endAge: g('endAge'),
       empIncome: g('empIncome'), contribRrsp: g('contribRrsp'), contribTfsa: g('contribTfsa'), contribNonreg: g('contribNonreg'),
       cpp65: g('cpp65'), oasYears: g('oasYears'), dbPension: g('dbPension'), dbStart: g('dbStart'), dbIndex: g('dbIndex'),
-      dbSurvivor: g('dbSurvivor') || 0, otherIncome: g('otherIncome'), otherUntil: g('otherUntil'),
+      dbSurvivor: g('dbSurvivor') || 0,
+      otherList: p[pre + 'otherList'] || (g('otherIncome') > 0 ? [{ amount: g('otherIncome'), untilAge: g('otherUntil') }] : []),
       cppAge: s['cppAge' + sfx], oasAge: s['oasAge' + sfx], rrifStart: s['rrifStart' + sfx],
       cppF: cppFactor(s['cppAge' + sfx]), oasF: oasFactor(s['oasAge' + sfx]),
       reg: g('rrsp') + g('rrif'), tfsa: g('tfsa'), room: g('tfsaRoom'), cash: g('cash'), inv: g('inv'), acb: Math.min(g('invAcb'), g('inv')),
@@ -120,6 +123,11 @@
     const P = [makePerson(p, s, '', '')];
     if (couple) P.push(makePerson(p, s, 's_', '2'));
     let fhsa = p.fhsa, resp = p.respBal;
+    // Assets (real estate, gold, vehicles...) and debts (mortgage, loans).
+    const assets = (p.assets || []).map(a => ({ ...a, value: +a.value || 0, cost: a.cost === '' || a.cost == null ? +a.value || 0 : +a.cost,
+      growth: (+a.growth || 0) / 100, income: +a.income || 0, sellAge: +a.sellAge || 0, owner: +a.owner || 0, sold: false }));
+    const debts = (p.liabilities || []).map(d => ({ ...d, balance: +d.balance || 0, rate: (+d.rate || 0) / 100, payment: +d.payment || 0 }));
+    const ownerOf = a => { const i = a.owner === 1 && P[1] ? 1 : 0; return P[i].alive || !P[1 - i] || !P[1 - i].alive ? i : 1 - i; };
     const tRet = Math.max(0, Math.min(...P.map(x => x.retireAge - x.age0)));
     const rows = [];
     let survivorMode = false;
@@ -134,6 +142,26 @@
         if (t > 0) x.room += Math.round(TD.tfsaLimit * f / 500) * 500 + x.tfsaOutPrev;
         x.tfsaOutPrev = 0;
       }
+      if (t > 0) for (const a of assets) if (!a.sold) a.value *= 1 + a.growth;
+      let debtPay = 0;
+      for (const d of debts) {
+        if (d.balance <= 0) continue;
+        const interest = d.balance * d.rate;
+        const pay = Math.min(d.payment * 12, d.balance + interest);
+        d.balance += interest - pay;
+        debtPay += pay;
+      }
+      for (const a of assets) {
+        if (a.sold || !a.sellAge) continue;
+        const o = ownerOf(a);
+        if (!P[o].alive || ages[o] !== a.sellAge) continue;
+        a.sold = true;
+        P[o].inv += a.value;
+        P[o].acb += EXEMPT_ASSETS[a.type] ? a.value : a.cost;
+        notes.push(`Sold ${a.name || a.type} for ${Math.round(a.value).toLocaleString()} → non-registered${EXEMPT_ASSETS[a.type] ? ' (tax-free)' : ' (gain taxed when drawn)'}`);
+      }
+      const assetInc = P.map(() => 0);
+      for (const a of assets) if (!a.sold && a.income) assetInc[ownerOf(a)] += a.income * f;
       const me = P[0];
       let aipExcess = 0;
 
@@ -174,7 +202,7 @@
         const oas = age >= x.oasAge ? TD.oas.maxMonthly65 * 12 * Math.min(1, x.oasYears / 40) * x.oasF * (age >= 75 ? 1 + TD.oas.boost75 : 1) * f : 0;
         let db = x.dbPension > 0 && age >= x.dbStart ? x.dbPension * Math.pow(1 + x.dbIndex / 100, age - x.dbStart) : 0;
         if (x.survDb > 0) { db += x.survDb; x.survDb *= 1 + x.survDbIndex; }
-        const other = x.otherIncome > 0 && age <= x.otherUntil ? x.otherIncome * f : 0;
+        const other = x.otherList.reduce((t, o) => t + (+o.amount > 0 && age <= (+o.untilAge || 200) ? +o.amount * f : 0), 0) + assetInc[i];
         const emp = working ? x.empIncome * f : 0;
         const cR = working ? x.contribRrsp * f : 0;
         const interest = x.cash * rCash, div = x.inv * dy;
@@ -207,7 +235,7 @@
         }
         fhsa *= 1 + rReg;
         resp *= 1 + rResp;
-        finishRow(row, P, fhsa + resp, notes);
+        finishRow(row, P, fhsa + resp, notes, assets, debts);
         rows.push(row);
         handleDeaths(t, ages, P, f, notes);
         continue;
@@ -287,7 +315,7 @@
         return { net: sum(cs.map(k => k.inflow)) - tax, cs, taxes, d, tax };
       };
 
-      const need = p.spending * f * (ages[0] >= p.slowAge ? 1 + p.slowPct / 100 : 1) * (survivorMode ? p.survivorPct / 100 : 1);
+      const need = p.spending * f * (ages[0] >= p.slowAge ? 1 + p.slowPct / 100 : 1) * (survivorMode ? p.survivorPct / 100 : 1) + debtPay;
       const x = { cash: 0, inv: 0, tfsa: 0, reg: 0 };
       const tot = k => sum(avail[k]);
       let r = calc(x);
@@ -319,7 +347,7 @@
         const xp = P[k.i], v = inc[k.i], tx = r.taxes[j];
         addInc(row, v);
         row.regW += k.regW; row.minW += v.minW; row.cashW += k.cashW; row.invW += k.invW; row.tfsaW += k.tfsaW; row.gains += k.gains;
-        row.taxable += tx.taxable; row.clawback += tx.clawback; row.taxables[k.i] = tx.taxable;
+        row.taxable += tx.taxable; row.clawback += tx.clawback; row.taxables[k.i] = tx.taxable; row.fed += tx.fed; row.prov += tx.prov;
         const extra = k.regW - v.minW;
         row.withholding += extra > 0 ? extra * withholdingRate(extra) : 0;
         // apply withdrawals
@@ -354,7 +382,7 @@
       }
       fhsa *= 1 + rReg;
       resp *= 1 + rResp;
-      finishRow(row, P, fhsa + resp, notes);
+      finishRow(row, P, fhsa + resp, notes, assets, debts);
       rows.push(row);
       if (handleDeaths(t, ages, P, f, row.notes)) survivorMode = true;
     }
@@ -364,13 +392,17 @@
     const last = rows[rows.length - 1];
     let deathTax = 0;
     const regLeft = sum(P.map(x => x.reg)), invLeft = sum(P.map(x => x.inv)), acbLeft = sum(P.map(x => x.acb));
+    const left = assets.filter(a => !a.sold);
+    const assetsLeft = sum(left.map(a => a.value));
+    const assetGains = sum(left.filter(a => !EXEMPT_ASSETS[a.type]).map(a => Math.max(0, a.value - a.cost)));
+    const debtLeft = sum(debts.map(d => Math.max(0, d.balance)));
     if (fp.lastComp) {
       const lc = fp.lastComp;
-      const t = computeTax({ ...lc.c, ordinary: lc.c.ordinary + regLeft + fhsa, taxableGains: lc.c.taxableGains + Math.max(0, invLeft - acbLeft) * TD.gcapInclusion },
+      const t = computeTax({ ...lc.c, ordinary: lc.c.ordinary + regLeft + fhsa, taxableGains: lc.c.taxableGains + (Math.max(0, invLeft - acbLeft) + assetGains) * TD.gcapInclusion },
         lc.age, p.province, lc.f);
       deathTax = t.total - lc.tax;
     }
-    const estateNominal = regLeft + fhsa + resp + sum(P.map(x => x.tfsa + x.inv + x.cash)) - deathTax;
+    const estateNominal = regLeft + fhsa + resp + sum(P.map(x => x.tfsa + x.inv + x.cash)) + assetsLeft - debtLeft - deathTax;
 
     let tax = 0, claw = 0, short = 0, taxable = 0, cppOas = 0, split = 0, depletedAge = null;
     for (const row of rows) {
@@ -401,14 +433,16 @@
   function blankRow(t, ages, P, f, working) {
     const label = P.map((x, i) => (x.alive ? ages[i] : '†')).join(' / ');
     return { t, label, age: ages[0], f, working, cpp: 0, oas: 0, db: 0, other: 0, emp: 0, interest: 0, div: 0, regW: 0, minW: 0,
-      cashW: 0, invW: 0, tfsaW: 0, gains: 0, taxable: 0, tax: working ? null : 0, clawback: 0, need: 0, net: 0, shortfall: 0,
+      cashW: 0, invW: 0, tfsaW: 0, gains: 0, taxable: 0, fed: 0, prov: 0, tax: working ? null : 0, clawback: 0, need: 0, net: 0, shortfall: 0,
       toTfsa: 0, toNonreg: 0, marginal: null, withholding: 0, split: 0, taxables: null };
   }
   function addInc(row, v) {
     row.cpp += v.cpp; row.oas += v.oas; row.db += v.db; row.other += v.other; row.emp += v.emp - v.cR;
     row.interest += v.interest; row.div += v.div;
   }
-  function finishRow(row, P, otherBal, notes) {
+  function finishRow(row, P, otherBal, notes, assets, debts) {
+    row.assets = sum(assets.filter(a => !a.sold).map(a => a.value));
+    row.debt = sum(debts.map(d => Math.max(0, d.balance)));
     row.reg = sum(P.map(x => x.reg)); row.tfsa = sum(P.map(x => x.tfsa)); row.cash = sum(P.map(x => x.cash)); row.inv = sum(P.map(x => x.inv));
     row.other_bal = otherBal;
     row.total = row.reg + row.tfsa + row.cash + row.inv + otherBal;

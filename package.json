@@ -1,0 +1,11 @@
+{
+  "name": "fimoksha",
+  "private": true,
+  "description": "FiMoksha Canadian retirement planner",
+  "scripts": {
+    "test": "node tests/engine.test.js && node tests/rls.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.17"
+  }
+}
