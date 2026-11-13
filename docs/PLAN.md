@@ -6,7 +6,7 @@ Source: Miro board **FiMoksha Web App Product Plan** (Feature backlog, Release r
 | Topic | Decision |
 |---|---|
 | Who logs in | **Clients, advisors and admin.** An advisor manages several client households; clients see only their own; admin configures the app. |
-| Backend | **Supabase** (hosted Postgres + sign-in + per-row security), Canadian region. Frontend stays a static site. |
+| Backend | **Own server, no third-party services** (changed 2026-11-08, replacing Supabase): Node.js server + self-hosted PostgreSQL. Email optional via an SMTP server we configure. |
 | Spouse | **Part of one household.** One login per household; spouse and dependents are people inside it. |
 | Insurance | Blank tab for now (details TBC). |
 | Assets, liabilities, budget fields | Common fields assumed (see the Assets & Liabilities and Budget tabs). |
@@ -15,8 +15,8 @@ Source: Miro board **FiMoksha Web App Product Plan** (Feature backlog, Release r
 | Release 2 & 3, sign-up mock-up | Template leftovers — ignored. |
 
 ## Built so far (2026-11-07)
-- Sign-in with client / advisor / admin roles; household list and advisor assignment for admins; demo mode when no Supabase project is connected.
-- Supabase migration with Row-Level Security, tested with PGlite (`npm test`).
+- Sign-in with client / advisor / admin roles; household list, advisor assignment, add user and set password for admins; demo mode when no server is reachable.
+- Own Node.js server (`server/`) with PostgreSQL; access rules tested over HTTP with PGlite (`npm test`).
 - Tabs: Dashboard (RAG), Profile (+ spouse, dependents), Goals, Accounts, Insurance (blank), Assets & Liabilities, Budget (income + expenses), Taxes, Projection, Estate, Scenarios, Rules.
 - **Data model simplification:** each household's plan is saved as one JSON document (`households.data`) instead of many tables. Access control stays in tables (`profiles`, `advisor_assignments`). This keeps the MVP fast to change; the configurable-fields tables below come with P3.
 
@@ -24,18 +24,19 @@ Source: Miro board **FiMoksha Web App Product Plan** (Feature backlog, Release r
 
 ## Architecture
 ```
-Browser (static site: today's planner + new tabs)
-   │  supabase-js (HTTPS, user's sign-in token)
+Browser (the planner page, scripts served by our server only)
+   │  HTTPS, session cookie
    ▼
-Supabase, region ca-central-1 (Montréal)
-   ├─ Auth: email + password / magic link, MFA for advisors & admin
-   ├─ Postgres with Row-Level Security on every table
-   ├─ Edge Functions: invite client, admin tasks, (later) PDF reports
-   └─ Daily backups (Pro plan: point-in-time recovery)
+Node.js server (server/server.mjs) — behind Caddy / nginx / IIS for HTTPS
+   ├─ Serves the page and /api (sign-in, households, users, assignments)
+   ├─ Enforces every access rule (server/api.mjs)
+   ├─ Optional SMTP for confirmation and password-reset emails
+   ▼
+PostgreSQL we run (data stays on our own server in Canada)
+   └─ Backups with pg_dump / PostgreSQL's own tools
 ```
-- The tax/projection engine (`js/engine.js`) keeps running **in the browser**, so results update instantly. The same file can run in an Edge Function later for advisor reports.
-- Frontend hosting: GitHub Pages works as-is (still static). Netlify/Vercel are alternatives if we want preview links per change.
-- Small build step (Vite) to keep the Supabase keys out of the source and split the code into modules.
+- The tax/projection engine (`js/engine.js`) runs **in the browser**, so results update instantly. The same file can run on the server later for advisor reports.
+- Hosting: any VPS or Windows/Linux machine that can run Node.js and PostgreSQL. A static host such as GitHub Pages only gives demo mode.
 
 ## Roles & access
 | Role | Can see | Can change |
@@ -44,7 +45,7 @@ Supabase, region ca-central-1 (Montréal)
 | Advisor | Households assigned to them | Those households' data, scenarios, notes |
 | Admin | Everything | Tabs, field layout, users and roles, advisor assignments |
 
-All enforced in the database (Row-Level Security), not just hidden in the UI.
+All enforced by the server, not just hidden in the UI.
 
 ## Data model
 **Fixed tables** for things that are lists (a household can have many of them):
@@ -94,25 +95,25 @@ Engine additions: real-estate appreciation and rent, mortgage/loan payments in s
 **Dashboard RAG (proposal — needs Manish's thresholds):** Green = spending funded to plan-to age with a cushion ≥ X years; Amber = funded but thin cushion, OAS clawback or high average tax; Red = money runs short.
 
 ## Security & privacy
-- Data stored in Canada (Supabase `ca-central-1`); PIPEDA-style privacy notice and consent at sign-up.
-- Row-Level Security on every table; MFA required for advisors and admin.
+- Data stored on our own server in Canada; PIPEDA-style privacy notice and consent at sign-up.
+- Server-side access checks on every request; MFA for advisors and admin (later).
 - Don't collect SIN or bank login details.
 - Audit log of changes; account/data deletion on request.
-- Production on Supabase Pro (free tier pauses inactive projects and has no point-in-time backups).
+- Scheduled database backups kept off the server.
 
 ## Rough running cost
 | Item | Cost |
 |---|---|
-| Supabase Pro | ~US$25/month |
+| Server (VPS in Canada, Node + PostgreSQL) | ~C$10–30/month |
 | Frontend hosting | Free (GitHub Pages / Netlify / Vercel free tier) |
 | Domain (e.g. fimoksha.ca) | ~C$20/year |
-| Transactional email (Resend/Postmark) | Free tier to start |
+| Email | Optional: any SMTP server we already have |
 
 ## Schedule (matches the Miro roadmap)
 | Dates | Work |
 |---|---|
 | Nov 9 – Nov 27 | **Discovery & design:** answer open questions, field lists, RAG rules, wireframes |
-| Nov 30 – Jan 8 | **Sign-up, dashboard, settings:** Supabase project, sign-in, roles, households, profile/spouse/dependents, tab & field config + admin screen, save/load |
+| Nov 30 – Jan 8 | **Sign-up, dashboard, settings:** server + database, sign-in, roles, households, profile/spouse/dependents, tab & field config + admin screen, save/load |
 | Dec 7 – Jan 22 | **Core workflow:** accounts, assets & liabilities, insurance, budget, goals; connect engine to saved data; saved scenarios; projection, taxes, estate; dashboard RAG |
 | Jan 25 – Feb 5 | **QA & beta** with a few real households |
 | Feb 8 | **MVP launch** |

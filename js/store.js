@@ -1,75 +1,60 @@
-// Data layer. Same interface for Supabase (real multi-user) and a demo mode that
-// keeps everything in this browser and applies the same access rules as the database.
+// Data layer. Same interface for the FiMoksha server (real multi-user, server/server.mjs) and a demo
+// mode that keeps everything in this browser and applies the same access rules as the server.
 (function () {
-  const cfg = window.FIMOKSHA_CONFIG || {};
-  const useSupabase = !!(cfg.supabaseUrl && cfg.supabaseAnonKey);
 
-  // ---------------- Supabase ----------------
-  function supabaseStore() {
-    let sb, me = null, recovery = /type=recovery/.test(location.hash);
-    const SB_SCRIPT = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js';
-    const load = () => new Promise((res, rej) => {
-      if (window.supabase) return res();
-      const s = document.createElement('script');
-      s.src = SB_SCRIPT; s.onload = res; s.onerror = () => rej(new Error('Could not load Supabase library'));
-      document.head.appendChild(s);
-    });
-    const err = r => { if (r.error) throw new Error(r.error.message); return r.data; };
-    async function loadMe() {
-      const { data } = await sb.auth.getUser();
-      if (!data.user) return (me = null);
-      const prof = err(await sb.from('profiles').select('*').eq('id', data.user.id).single());
-      return (me = { id: prof.id, email: prof.email, firstName: prof.first_name || '', lastName: prof.last_name || '', role: prof.role });
+  // ---------------- Own server (server/server.mjs) ----------------
+  function serverStore(health) {
+    let me = null, resetToken = null;
+    async function api(method, url, body) {
+      const r = await fetch('api' + url, {
+        method, credentials: 'same-origin',
+        headers: method === 'GET' ? {} : { 'Content-Type': 'application/json', 'X-Fimoksha': '1' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      let out = {};
+      try { out = await r.json(); } catch (e) { /* empty reply */ }
+      if (!r.ok) throw new Error(out.error || `Server error (${r.status})`);
+      return out;
     }
+    const setMe = out => (me = out && out.user ? out.user : null);
     return {
-      mode: 'supabase',
+      mode: 'server',
+      features: { email: !!health.email, signup: !!health.signup },
       async init() {
-        await load();
-        sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
-        sb.auth.onAuthStateChange(event => { if (event === 'PASSWORD_RECOVERY') recovery = true; });
-        const user = await loadMe();
-        // Clean the sign-in tokens out of the address bar after an email link.
-        if (/access_token|code=|type=/.test(location.hash + location.search)) history.replaceState(null, '', location.pathname);
-        return user;
+        const qs = new URLSearchParams(location.search);
+        const confirm = qs.get('confirm');
+        resetToken = qs.get('reset');
+        // Take the one-time token out of the address bar.
+        if (confirm || resetToken) history.replaceState(null, '', location.pathname);
+        if (confirm) {
+          try { return setMe(await api('POST', '/auth/confirm', { token: confirm })); }
+          catch (e) { alert(e.message); }
+        }
+        return setMe(await api('GET', '/me'));
       },
-      inRecovery: () => recovery,
-      async setNewPassword(password) { err(await sb.auth.updateUser({ password })); recovery = false; },
+      inRecovery: () => !!resetToken,
+      async setNewPassword(password) { const out = await api('POST', '/auth/reset', { token: resetToken, password }); resetToken = null; return setMe(out); },
       me: () => me,
-      async signIn(email, password) { err(await sb.auth.signInWithPassword({ email, password })); return loadMe(); },
+      async signIn(email, password) { return setMe(await api('POST', '/auth/signin', { email, password })); },
       async signUp(email, password, firstName, lastName) {
-        const d = err(await sb.auth.signUp({ email, password, options: { data: { first_name: firstName, last_name: lastName }, emailRedirectTo: location.origin + location.pathname } }));
-        if (!d.session) return { needsConfirmation: true };
-        return loadMe();
+        const out = await api('POST', '/auth/signup', { email, password, firstName, lastName });
+        if (out.needsConfirmation) return { needsConfirmation: true };
+        return setMe(out);
       },
-      async resetPassword(email) { err(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname })); },
-      async signOut() { await sb.auth.signOut(); me = null; },
-      async listHouseholds() {
-        const rows = err(await sb.from('households').select('id, name, owner_id, updated_at, owner:profiles!households_owner_id_fkey(first_name, last_name, email)').order('updated_at', { ascending: false }));
-        return rows.map(r => ({ id: r.id, name: r.name, ownerId: r.owner_id, updatedAt: r.updated_at, ownerName: r.owner ? `${r.owner.first_name || ''} ${r.owner.last_name || ''}`.trim() || r.owner.email : '' }));
-      },
-      async getHousehold(id) {
-        const r = err(await sb.from('households').select('id, name, owner_id, data, updated_at').eq('id', id).single());
-        return { id: r.id, name: r.name, ownerId: r.owner_id, data: r.data, updatedAt: r.updated_at };
-      },
-      async createHousehold(name, data) {
-        const r = err(await sb.from('households').insert({ owner_id: me.id, name, data }).select('id').single());
-        return r.id;
-      },
-      async saveHousehold(id, name, data) { err(await sb.from('households').update({ name, data }).eq('id', id)); },
-      async updateMyName(firstName, lastName) {
-        err(await sb.from('profiles').update({ first_name: firstName, last_name: lastName }).eq('id', me.id));
-        me.firstName = firstName; me.lastName = lastName;
-      },
-      async listProfiles() {
-        return err(await sb.from('profiles').select('id, email, first_name, last_name, role').order('email'))
-          .map(p => ({ id: p.id, email: p.email, firstName: p.first_name || '', lastName: p.last_name || '', role: p.role }));
-      },
-      async setRole(userId, role) { err(await sb.from('profiles').update({ role }).eq('id', userId)); },
-      async listAssignments() { return err(await sb.from('advisor_assignments').select('advisor_id, household_id')).map(a => ({ advisorId: a.advisor_id, householdId: a.household_id })); },
-      async setAdvisor(householdId, advisorId) {
-        err(await sb.from('advisor_assignments').delete().eq('household_id', householdId));
-        if (advisorId) err(await sb.from('advisor_assignments').insert({ advisor_id: advisorId, household_id: householdId }));
-      },
+      async resetPassword(email) { await api('POST', '/auth/forgot', { email }); },
+      async changePassword(current, password) { await api('POST', '/me/password', { current, password }); },
+      async signOut() { await api('POST', '/auth/signout'); me = null; },
+      listHouseholds: () => api('GET', '/households'),
+      getHousehold: id => api('GET', '/households/' + encodeURIComponent(id)),
+      async createHousehold(name, data) { return (await api('POST', '/households', { name, data })).id; },
+      async saveHousehold(id, name, data) { await api('PUT', '/households/' + encodeURIComponent(id), { name, data }); },
+      async updateMyName(firstName, lastName) { await api('PATCH', '/me', { firstName, lastName }); me.firstName = firstName; me.lastName = lastName; },
+      listProfiles: () => api('GET', '/users'),
+      async setRole(userId, role) { await api('PATCH', '/users/' + encodeURIComponent(userId), { role }); },
+      async createUser(u) { return (await api('POST', '/users', u)).user; },
+      async adminSetPassword(userId, password) { await api('POST', `/users/${encodeURIComponent(userId)}/password`, { password }); },
+      listAssignments: () => api('GET', '/assignments'),
+      async setAdvisor(householdId, advisorId) { await api('PUT', `/households/${encodeURIComponent(householdId)}/advisor`, { advisorId: advisorId || null }); },
     };
   }
 
@@ -157,7 +142,16 @@
           db.households.some(h => h.ownerId === u.id && can(h)));
         return visible.map(u => ({ ...u }));
       },
-      async setRole(userId, role) { need(me && me.role === 'admin'); read().users.find(u => u.id === userId).role = role; write(); },
+      features: { email: false, signup: true },
+      async setRole(userId, role) { need(me && me.role === 'admin' && userId !== me.id); read().users.find(u => u.id === userId).role = role; write(); },
+      async createUser(u) {
+        need(me && me.role === 'admin');
+        const db = read();
+        if (db.users.some(x => x.email.toLowerCase() === String(u.email).toLowerCase())) throw new Error('That email already has an account.');
+        const nu = { id: uid(), email: u.email, firstName: u.firstName || '', lastName: u.lastName || '', role: u.role || 'client' };
+        db.users.push(nu); write();
+        return { ...nu };
+      },
       async listAssignments() { need(me); return read().assignments.filter(a => me.role === 'admin' || a.advisorId === me.id).map(a => ({ ...a })); },
       async setAdvisor(householdId, advisorId) {
         need(me && me.role === 'admin');
@@ -170,5 +164,25 @@
     };
   }
 
-  window.Store = useSupabase ? supabaseStore() : demoStore();
+  // Use the server when the page was served by it (it answers /api/health); otherwise demo mode,
+  // e.g. when index.html is opened as a file or hosted on a static site.
+  const cfg = window.FIMOKSHA_CONFIG || {};
+  let impl = null;
+  async function pick() {
+    if (cfg.mode === 'demo' || location.protocol === 'file:') return demoStore();
+    try {
+      const r = await fetch('api/health', { credentials: 'same-origin' });
+      const h = r.ok ? await r.json() : null;
+      if (h && h.ok) return serverStore(h);
+    } catch (e) { /* no server */ }
+    if (cfg.mode === 'server') throw new Error("Can't reach the FiMoksha server.");
+    return demoStore();
+  }
+  window.Store = new Proxy({}, {
+    get(_, k) {
+      if (k === 'init') return async () => { impl = await pick(); return impl.init(); };
+      if (!impl) throw new Error('Store used before init()');
+      return impl[k];
+    },
+  });
 })();

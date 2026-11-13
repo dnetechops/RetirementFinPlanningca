@@ -1,3 +1,5 @@
 .claude/
 *.zip
 node_modules/
+.env
+.devdb/

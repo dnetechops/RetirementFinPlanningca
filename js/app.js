@@ -23,13 +23,14 @@
     $('#plan-head').hidden = view !== 'plan';
     $('#user-box').hidden = !me;
     $('#btn-home').hidden = !(me && me.role !== 'client' && view === 'plan');
+    $('#btn-password').hidden = !(me && S.mode === 'server');
   }
   function flash(el, msg, ok = true) { el.textContent = msg; el.className = 'msg ' + (ok ? 'ok' : 'bad'); }
 
   async function boot() {
-    $('#mode-badge').hidden = S.mode !== 'demo';
     try { me = await S.init(); } catch (e) { $('#view-loading').innerHTML = `<p class="bad">Couldn't start: ${esc(e.message)}</p>`; return; }
-    if (me && S.inRecovery()) return showSetPassword();
+    $('#mode-badge').hidden = S.mode !== 'demo';
+    if (S.inRecovery()) return showSetPassword();
     me ? afterLogin() : showAuth();
   }
 
@@ -43,7 +44,7 @@
     show('auth');
     $('#newpw-form').addEventListener('submit', async e => {
       e.preventDefault();
-      try { await S.setNewPassword(new FormData(e.target).get('pw')); afterLogin(); } catch (err) { flash($('#newpw-msg'), err.message, false); }
+      try { me = await S.setNewPassword(new FormData(e.target).get('pw')); afterLogin(); } catch (err) { flash($('#newpw-msg'), err.message, false); }
     });
   }
 
@@ -51,6 +52,7 @@
   function showAuth() {
     me = null;
     const demo = S.mode === 'demo';
+    const { email: hasEmail, signup } = S.features;
     $('#view-auth').innerHTML = `
       <div class="auth">
         ${demo ? `
@@ -68,11 +70,11 @@
             <label>Email<input type="email" name="email" required autocomplete="email"></label>
             <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
             <button class="primary">Sign in</button>
-            <p class="small"><a href="#" id="forgot">Forgot password?</a></p>
+            <p class="small">${hasEmail ? '<a href="#" id="forgot">Forgot password?</a>' : '<span class="muted">Forgot your password? Ask an admin to reset it.</span>'}</p>
             <p id="signin-msg" class="msg"></p>
           </form>
         </div>`}
-        <div class="card">
+        ${signup ? `<div class="card">
           <h2>Create an account</h2>
           <form id="signup-form" class="stack">
             <div class="grid two">
@@ -85,7 +87,7 @@
             <p class="muted small">New accounts start as clients. An admin can make someone an advisor.</p>
             <p id="signup-msg" class="msg"></p>
           </form>
-        </div>
+        </div>` : ''}
       </div>`;
     show('auth');
     $$('.demo-user').forEach(b => b.addEventListener('click', async () => { me = await S.demoSignIn(b.dataset.id); afterLogin(); }));
@@ -104,7 +106,8 @@
       if (!email) return flash($('#signin-msg'), 'Enter your email first.', false);
       try { await S.resetPassword(email); flash($('#signin-msg'), 'Check your email for a reset link.'); } catch (err) { flash($('#signin-msg'), err.message, false); }
     });
-    $('#signup-form').addEventListener('submit', async e => {
+    const su = $('#signup-form');
+    if (su) su.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(e.target);
       try {
@@ -114,6 +117,23 @@
       } catch (err) { flash($('#signup-msg'), err.message, false); }
     });
   }
+
+  // Asks for a new password (and the current one when changing your own); closes once onSave succeeds.
+  function passwordDialog(title, needCurrent, onSave) {
+    const dlg = $('#pw-dialog'), form = $('#pw-form');
+    form.reset();
+    $('#pw-title').textContent = title;
+    $('#pw-current-label').hidden = !needCurrent;
+    form.current.required = needCurrent;
+    $('#pw-msg').textContent = '';
+    form.onsubmit = async e => {
+      if (e.submitter && e.submitter.value === 'cancel') return;
+      e.preventDefault();
+      try { await onSave(form.current.value, form.password.value); dlg.close(); } catch (err) { flash($('#pw-msg'), err.message, false); }
+    };
+    dlg.showModal();
+  }
+  $('#btn-password').addEventListener('click', () => passwordDialog('Change your password', true, (cur, pw) => S.changePassword(cur, pw)));
 
   $('#btn-signout').addEventListener('click', async () => { await flushSave(); await S.signOut(); cur = null; showAuth(); });
   $('#btn-home').addEventListener('click', async () => { await flushSave(); cur = null; showHome(); });
@@ -138,7 +158,7 @@
     el.innerHTML = '<p class="muted">Loading…</p>';
     try {
       const [list, assigns, profiles] = await Promise.all([S.listHouseholds(), S.listAssignments(), S.listProfiles()]);
-      const isAdmin = me.role === 'admin';
+      const isAdmin = me.role === 'admin', serverMode = S.mode === 'server';
       const advisors = profiles.filter(p => p.role === 'advisor');
       const advisorOf = id => (assigns.find(a => a.householdId === id) || {}).advisorId || '';
       const nameOf = id => { const p = profiles.find(x => x.id === id); return p ? `${p.firstName} ${p.lastName}`.trim() || p.email : ''; };
@@ -157,11 +177,24 @@
         <div class="card">
           <h2>Users &amp; roles</h2>
           <p class="muted small">New sign-ups are clients. Make someone an advisor here, then assign households to them above.</p>
-          <div class="table-wrap"><table class="data"><thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead><tbody>
+          <div class="table-wrap"><table class="data"><thead><tr><th>Name</th><th>Email</th><th>Role</th>${serverMode ? '<th></th>' : ''}</tr></thead><tbody>
             ${profiles.map(p => `<tr><td>${esc(`${p.firstName} ${p.lastName}`)}</td><td>${esc(p.email)}</td>
-              <td><select data-role="${esc(p.id)}"${p.id === me.id ? ' disabled title="You can\'t change your own role"' : ''}>${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}"${k === p.role ? ' selected' : ''}>${v}</option>`).join('')}</select></td></tr>`).join('')}
+              <td><select data-role="${esc(p.id)}"${p.id === me.id ? ' disabled title="You can\'t change your own role"' : ''}>${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}"${k === p.role ? ' selected' : ''}>${v}</option>`).join('')}</select></td>
+              ${serverMode ? `<td>${p.id === me.id ? '' : `<button data-setpw="${esc(p.id)}" data-email="${esc(p.email)}">Set password</button>`}</td>` : ''}</tr>`).join('')}
           </tbody></table></div>
           <p id="admin-msg" class="msg"></p>
+          <form id="add-user" class="add-user stack">
+            <h3>Add a user</h3>
+            <div class="grid">
+              <label>First name<input name="first" required></label>
+              <label>Last name<input name="last" required></label>
+              <label>Email<input type="email" name="email" required></label>
+              ${serverMode ? '<label>Starting password (8+)<input type="password" name="password" minlength="8" required autocomplete="new-password"></label>' : ''}
+              <label>Role<select name="role">${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
+              <button class="primary">Add user</button>
+            </div>
+            ${serverMode ? '<p class="muted small">Give the person their email and starting password; they can change it with the Password button after signing in.</p>' : ''}
+          </form>
         </div>` : ''}`;
       $$('[data-open]', el).forEach(b => b.addEventListener('click', () => openHousehold(b.dataset.open)));
       $$('[data-assign]', el).forEach(s => s.addEventListener('change', async () => {
@@ -170,6 +203,21 @@
       $$('[data-role]', el).forEach(s => s.addEventListener('change', async () => {
         try { await S.setRole(s.dataset.role, s.value); showHome(); } catch (e) { flash($('#admin-msg'), e.message, false); }
       }));
+      $$('[data-setpw]', el).forEach(b => b.addEventListener('click', () =>
+        passwordDialog(`Set password for ${b.dataset.email}`, false, async (_, pw) => {
+          await S.adminSetPassword(b.dataset.setpw, pw);
+          flash($('#admin-msg'), `Password set for ${b.dataset.email}. They have been signed out everywhere.`);
+        })));
+      const au = $('#add-user', el);
+      if (au) au.addEventListener('submit', async e => {
+        e.preventDefault();
+        const f = new FormData(au);
+        try {
+          await S.createUser({ email: f.get('email'), password: f.get('password') || '', firstName: f.get('first'), lastName: f.get('last'), role: f.get('role') });
+          await showHome();
+          flash($('#admin-msg'), `Added ${f.get('email')}.`);
+        } catch (err) { flash($('#admin-msg'), err.message, false); }
+      });
     } catch (e) { el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
   }
 
